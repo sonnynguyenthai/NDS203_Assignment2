@@ -10,17 +10,34 @@ using System.Threading;
 
 namespace ChatServer
 {
+    /// <summary>
+    /// Represents a connected client with their TCP connection, username, and moderator status
+    /// </summary>
     class ClientInfo
     {
+        /// <summary>TCP connection to the client</summary>
         public TcpClient Tcp { get; }
+
+        /// <summary>Client's chosen username (empty until set)</summary>
         public string Username { get; set; } = "";
+
+        /// <summary>Whether this client has moderator privileges</summary>
         public bool IsModerator { get; set; } = false;
 
+        /// <summary>
+        /// Creates a new ClientInfo instance for a connected client
+        /// </summary>
+        /// <param name="tcp">The TCP connection to the client</param>
         public ClientInfo(TcpClient tcp) => Tcp = tcp;
     }
 
+    /// <summary>
+    /// Main chat server class that handles client connections, message broadcasting,
+    /// command processing, and moderator management
+    /// </summary>
     class Server
     {
+        // Core networking components
         private readonly TcpListener _listener;
         private readonly ConcurrentDictionary<TcpClient, ClientInfo> _clients = new();
         private readonly HashSet<string> _usernames = new(StringComparer.OrdinalIgnoreCase);
@@ -28,20 +45,28 @@ namespace ChatServer
         private DateTime _startTime = DateTime.UtcNow;
         private volatile bool _running = true;
 
+        /// <summary>
+        /// Initializes a new server instance on the specified port
+        /// </summary>
+        /// <param name="port">Port number to listen on</param>
         public Server(int port)
         {
             _listener = new TcpListener(IPAddress.Any, port);
         }
 
+        /// <summary>
+        /// Starts the chat server and begins accepting client connections.
+        /// Runs the main server loop for console commands.
+        /// </summary>
         public void Start()
         {
             _listener.Start();
             Console.WriteLine($"[server] Listening on port {((_listener.LocalEndpoint as IPEndPoint)?.Port ?? 0)}");
 
-            // Accept loop
+            // Start background thread to accept incoming client connections
             new Thread(AcceptLoop) { IsBackground = true }.Start();
 
-            // Server console command loop
+            // Main server console command loop for administrative commands
             Console.WriteLine("[server] Type !mods, !mod <user>, !kick <user> [reason], !shutdown");
             while (_running)
             {
@@ -51,45 +76,69 @@ namespace ChatServer
             }
         }
 
+        /// <summary>
+        /// Background thread that continuously accepts new client connections.
+        /// Each new client gets their own thread for message handling.
+        /// </summary>
         private void AcceptLoop()
         {
             while (_running)
             {
                 try
                 {
+                    // Wait for and accept new client connection
                     var tcp = _listener.AcceptTcpClient();
                     Console.WriteLine("[server] Incoming connection...");
+
+                    // Create client info and add to active clients list
                     var ci = new ClientInfo(tcp);
                     _clients[tcp] = ci;
 
+                    // Start a new thread to handle this client's messages
                     var th = new Thread(() => ClientLoop(ci)) { IsBackground = true };
                     th.Start();
                 }
                 catch (SocketException)
                 {
+                    // Expected when server shuts down
                     if (!_running) break;
                 }
             }
         }
 
+        /// <summary>
+        /// Reads a line of text from the network stream until newline character
+        /// </summary>
+        /// <param name="ns">Network stream to read from</param>
+        /// <returns>Line of text read from the stream</returns>
         private static string ReadLine(NetworkStream ns)
         {
             var sb = new StringBuilder();
             int b;
             while ((b = ns.ReadByte()) != -1)
             {
-                if (b == (int)'\n') break;
-                if (b != '\r') sb.Append((char)b);
+                if (b == (int)'\n') break;  // End of line found
+                if (b != '\r') sb.Append((char)b);  // Skip carriage return, keep other chars
             }
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Writes a line of text to the network stream with proper line ending
+        /// </summary>
+        /// <param name="ns">Network stream to write to</param>
+        /// <param name="line">Text line to send</param>
         private static void WriteLine(NetworkStream ns, string line)
         {
             var bytes = Encoding.UTF8.GetBytes(line + "\r\n");
             ns.Write(bytes, 0, bytes.Length);
         }
 
+        /// <summary>
+        /// Main message handling loop for a connected client.
+        /// Handles username setup, command processing, and message broadcasting.
+        /// </summary>
+        /// <param name="ci">Client information for this connection</param>
         private void ClientLoop(ClientInfo ci)
         {
             var ns = ci.Tcp.GetStream();
@@ -97,38 +146,46 @@ namespace ChatServer
 
             try
             {
-                // Expect username first
+                // Phase 1: Username setup - client must set username before chatting
                 while (string.IsNullOrWhiteSpace(ci.Username))
                 {
                     string first = ReadLine(ns);
+
+                    // Validate that client starts with username command
                     if (!first.StartsWith("!username ", StringComparison.OrdinalIgnoreCase))
                     {
                         WriteLine(ns, "ERROR: You must start with !username <name>");
                         continue;
                     }
+
+                    // Extract and validate username
                     var name = first.Substring("!username ".Length).Trim();
                     if (string.IsNullOrWhiteSpace(name) || name.Contains(' '))
                     {
                         WriteLine(ns, "ERROR: Invalid username (no spaces, non-empty).");
                         continue;
                     }
+
+                    // Check if username is available
                     if (!TryAddUsername(name))
                     {
                         WriteLine(ns, "ERROR: Username already in use. Disconnecting.");
                         break;
                     }
+
+                    // Username successfully set
                     ci.Username = name;
                     WriteLine(ns, $"OK: Welcome {ci.Username}!");
                     Broadcast($"* {ci.Username} joined the chat *", exclude: ci);
                 }
 
+                // If username setup failed, disconnect client
                 if (string.IsNullOrWhiteSpace(ci.Username))
                 {
-                    // failed to set username; disconnect
                     return;
                 }
 
-                // Main loop
+                // Phase 2: Main chat loop - handle messages and commands
                 WriteLine(ns, "Type !commands for help.");
                 while (_running && ci.Tcp.Connected)
                 {
@@ -138,10 +195,12 @@ namespace ChatServer
 
                     if (line.StartsWith("!"))
                     {
+                        // Process command (whisper, who, about, etc.)
                         HandleClientCommand(ci, line);
                     }
                     else
                     {
+                        // Broadcast regular chat message to all clients
                         Broadcast($"[{ci.Username}]: {line}");
                     }
                 }
@@ -152,10 +211,16 @@ namespace ChatServer
             }
             finally
             {
+                // Always clean up connection when client disconnects
                 Disconnect(ci, notify: true, reason: "left the chat");
             }
         }
 
+        /// <summary>
+        /// Processes client commands like !who, !about, !whisper, !user, !kick, etc.
+        /// </summary>
+        /// <param name="ci">Client sending the command</param>
+        /// <param name="cmd">Command string to process</param>
         private void HandleClientCommand(ClientInfo ci, string cmd)
         {
             var ns = ci.Tcp.GetStream();
@@ -214,41 +279,67 @@ namespace ChatServer
             }
         }
 
+        /// <summary>
+        /// Sends a private message from one client to another
+        /// </summary>
+        /// <param name="from">Client sending the whisper</param>
+        /// <param name="toUser">Username of the target client</param>
+        /// <param name="message">Message content to send</param>
         private void Whisper(ClientInfo from, string toUser, string message)
         {
+            // Find target user by username (case-insensitive)
             var target = _clients.Values.FirstOrDefault(c => string.Equals(c.Username, toUser, StringComparison.OrdinalIgnoreCase));
             if (target == null)
             {
                 WriteLine(from.Tcp.GetStream(), $"User '{toUser}' not found.");
                 return;
             }
+
+            // Send message to both sender and recipient for confirmation
             WriteLine(target.Tcp.GetStream(), $"[whisper from {from.Username}]: {message}");
             WriteLine(from.Tcp.GetStream(), $"[whisper to {target.Username}]: {message}");
         }
 
+        /// <summary>
+        /// Changes a client's username with validation and atomic updates
+        /// </summary>
+        /// <param name="ci">Client changing their username</param>
+        /// <param name="newName">New username to set</param>
         private void ChangeUsername(ClientInfo ci, string newName)
         {
+            // Validate new username format
             if (string.IsNullOrWhiteSpace(newName) || newName.Contains(' '))
             {
                 WriteLine(ci.Tcp.GetStream(), "ERROR: Invalid username (no spaces, non-empty).");
                 return;
             }
+
+            // Thread-safe username management
             lock (_unameLock)
             {
+                // Check if new username is already taken
                 if (_usernames.Contains(newName))
                 {
                     WriteLine(ci.Tcp.GetStream(), "ERROR: Username already in use.");
                     return;
                 }
-                // swap names
+
+                // Atomically swap usernames: remove old, add new
                 if (!string.IsNullOrWhiteSpace(ci.Username)) _usernames.Remove(ci.Username);
                 _usernames.Add(newName);
                 var old = ci.Username;
                 ci.Username = newName;
+
+                // Notify all clients of the username change
                 Broadcast($"* {old} is now known as {ci.Username} *");
             }
         }
 
+        /// <summary>
+        /// Thread-safely adds a username to the global username set
+        /// </summary>
+        /// <param name="name">Username to add</param>
+        /// <returns>True if username was added, false if already exists</returns>
         private bool TryAddUsername(string name)
         {
             lock (_unameLock)
@@ -259,6 +350,11 @@ namespace ChatServer
             }
         }
 
+        /// <summary>
+        /// Broadcasts a message to all connected clients except optionally excluded one
+        /// </summary>
+        /// <param name="message">Message to broadcast</param>
+        /// <param name="exclude">Optional client to exclude from broadcast</param>
         private void Broadcast(string message, ClientInfo? exclude = null)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(message + "\r\n");
@@ -273,45 +369,71 @@ namespace ChatServer
                 }
                 catch
                 {
-                    // ignore write errors; clean up on next loop
+                    // Ignore write errors; connection will be cleaned up later
                 }
             }
-            Console.WriteLine(message);
+            Console.WriteLine(message);  // Also log to server console
         }
 
+        /// <summary>
+        /// Cleanly disconnects a client and removes them from all tracking structures
+        /// </summary>
+        /// <param name="ci">Client to disconnect</param>
+        /// <param name="notify">Whether to broadcast disconnection message</param>
+        /// <param name="reason">Reason for disconnection (for notification)</param>
         private void Disconnect(ClientInfo ci, bool notify, string reason)
         {
             if (!_clients.ContainsKey(ci.Tcp)) return;
 
+            // Remove from active clients list
             _clients.TryRemove(ci.Tcp, out _);
+
+            // Remove username from global set if set
             if (!string.IsNullOrWhiteSpace(ci.Username))
             {
                 lock (_unameLock) { _usernames.Remove(ci.Username); }
             }
+
+            // Close TCP connection
             try { ci.Tcp.Close(); } catch { }
 
+            // Notify other clients if requested
             if (notify && !string.IsNullOrWhiteSpace(ci.Username))
             {
                 Broadcast($"* {ci.Username} {reason} *");
             }
         }
 
+        /// <summary>
+        /// Kicks a user from the server with optional reason
+        /// </summary>
+        /// <param name="username">Username to kick</param>
+        /// <param name="reason">Reason for kicking</param>
         private void KickUser(string username, string reason)
         {
+            // Find target user by username
             var target = _clients.Values.FirstOrDefault(c => string.Equals(c.Username, username, StringComparison.OrdinalIgnoreCase));
             if (target == null)
             {
                 Console.WriteLine($"[server] Kick failed; user '{username}' not found.");
                 return;
             }
+
+            // Send kick notification to target client
             try
             {
                 WriteLine(target.Tcp.GetStream(), $"!kicked {reason}");
             }
             catch { }
+
+            // Disconnect the user
             Disconnect(target, notify: true, reason: $"was kicked ({reason})");
         }
 
+        /// <summary>
+        /// Handles server console commands for administration (moderator management, kicking, shutdown)
+        /// </summary>
+        /// <param name="line">Command line entered by server administrator</param>
         private void HandleServerCommand(string line)
         {
             var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
@@ -355,8 +477,15 @@ namespace ChatServer
         }
     }
 
+    /// <summary>
+    /// Main program entry point for the chat server
+    /// </summary>
     class Program
     {
+        /// <summary>
+        /// Application entry point - starts the chat server on specified or default port
+        /// </summary>
+        /// <param name="args">Command line arguments: [port] (optional, defaults to 5001)</param>
         static void Main(string[] args)
         {
             int port = 5001;
