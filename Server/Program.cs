@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -10,6 +11,30 @@ using System.Threading;
 
 namespace ChatServer
 {
+    /// <summary>
+    /// Represents a chat message for logging and history
+    /// </summary>
+    class ChatMessage
+    {
+        public DateTime Timestamp { get; }
+        public string Username { get; }
+        public string Content { get; }
+        public string Type { get; } // "chat", "whisper", "system", "command"
+
+        public ChatMessage(string username, string content, string type = "chat")
+        {
+            Timestamp = DateTime.UtcNow;
+            Username = username;
+            Content = content;
+            Type = type;
+        }
+
+        public override string ToString()
+        {
+            return $"[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Type.ToUpper()}] {Username}: {Content}";
+        }
+    }
+
     /// <summary>
     /// Represents a connected client with their TCP connection, username, and moderator status
     /// </summary>
@@ -24,11 +49,18 @@ namespace ChatServer
         /// <summary>Whether this client has moderator privileges</summary>
         public bool IsModerator { get; set; } = false;
 
+        /// <summary>When this client connected</summary>
+        public DateTime ConnectedAt { get; }
+
         /// <summary>
         /// Creates a new ClientInfo instance for a connected client
         /// </summary>
         /// <param name="tcp">The TCP connection to the client</param>
-        public ClientInfo(TcpClient tcp) => Tcp = tcp;
+        public ClientInfo(TcpClient tcp)
+        {
+            Tcp = tcp;
+            ConnectedAt = DateTime.UtcNow;
+        }
     }
 
     /// <summary>
@@ -45,6 +77,11 @@ namespace ChatServer
         private DateTime _startTime = DateTime.UtcNow;
         private volatile bool _running = true;
 
+        // Message logging and history
+        private readonly List<ChatMessage> _messageHistory = new();
+        private readonly object _historyLock = new();
+        private readonly string _logFilePath;
+
         /// <summary>
         /// Initializes a new server instance on the specified port
         /// </summary>
@@ -52,6 +89,10 @@ namespace ChatServer
         public Server(int port)
         {
             _listener = new TcpListener(IPAddress.Any, port);
+            _logFilePath = $"chat_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
+
+            // Log server startup
+            LogMessage("SERVER", "Chat server started", "system");
         }
 
         /// <summary>
@@ -160,9 +201,9 @@ namespace ChatServer
 
                     // Extract and validate username
                     var name = first.Substring("!username ".Length).Trim();
-                    if (string.IsNullOrWhiteSpace(name) || name.Contains(' '))
+                    if (!IsValidUsername(name))
                     {
-                        WriteLine(ns, "ERROR: Invalid username (no spaces, non-empty).");
+                        WriteLine(ns, "ERROR: Invalid username. Must be 3-20 characters, start with letter/number, and contain only letters, numbers, underscore, or hyphen.");
                         continue;
                     }
 
@@ -190,7 +231,6 @@ namespace ChatServer
                 while (_running && ci.Tcp.Connected)
                 {
                     string line = ReadLine(ns);
-                    if (line == null) break;
                     if (string.IsNullOrWhiteSpace(line)) continue;
 
                     if (line.StartsWith("!"))
@@ -231,7 +271,14 @@ namespace ChatServer
             {
                 case "!commands":
                     WriteLine(ns, "Commands: !who, !about, !whisper <user> <msg>, !w <user> <msg>, !user <newname>, !ping, !stats");
-                    if (ci.IsModerator) WriteLine(ns, "Moderator: !kick <user> [reason]");
+                    if (ci.IsModerator)
+                    {
+                        WriteLine(ns, "Moderator: !kick <user> [reason], !history");
+                    }
+                    else
+                    {
+                        WriteLine(ns, "Moderator commands: !kick <user> [reason], !history (moderator only)");
+                    }
                     break;
 
                 case "!who":
@@ -240,7 +287,7 @@ namespace ChatServer
                     break;
 
                 case "!about":
-                    WriteLine(ns, "NDS203 Chat Server — creator: Sonny, purpose: learning sockets, year: 2025");
+                    WriteLine(ns, "Sonny's Chat Server: creator: Sonny, purpose: learning sockets, year: 2025");
                     break;
 
                 case "!whisper":
@@ -273,6 +320,20 @@ namespace ChatServer
                     WriteLine(ns, $"Server Stats: {onlineUsers} online users, {moderators} moderators, uptime: {up:dd\\.hh\\:mm\\:ss}");
                     break;
 
+                case "!history":
+                    if (!ci.IsModerator)
+                    {
+                        WriteLine(ns, "ERROR: Only moderators can view chat history.");
+                        break;
+                    }
+                    var history = GetRecentHistory(10);
+                    WriteLine(ns, "Recent chat history:");
+                    foreach (var msg in history)
+                    {
+                        WriteLine(ns, $"  {msg}");
+                    }
+                    break;
+
                 default:
                     WriteLine(ns, "Unknown command. Try !commands");
                     break;
@@ -295,9 +356,40 @@ namespace ChatServer
                 return;
             }
 
+            // Log the whisper message
+            LogMessage(from.Username, $"whisper to {toUser}: {message}", "whisper");
+
             // Send message to both sender and recipient for confirmation
             WriteLine(target.Tcp.GetStream(), $"[whisper from {from.Username}]: {message}");
             WriteLine(from.Tcp.GetStream(), $"[whisper to {target.Username}]: {message}");
+        }
+
+        /// <summary>
+        /// Validates username format and characters
+        /// </summary>
+        /// <param name="username">Username to validate</param>
+        /// <returns>True if username is valid, false otherwise</returns>
+        private static bool IsValidUsername(string username)
+        {
+            if (string.IsNullOrWhiteSpace(username) || username.Contains(' '))
+                return false;
+
+            // Check for invalid characters (only allow alphanumeric, underscore, and hyphen)
+            foreach (char c in username)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '_' && c != '-')
+                    return false;
+            }
+
+            // Username must start with letter or number
+            if (username.Length > 0 && !char.IsLetterOrDigit(username[0]))
+                return false;
+
+            // Username length limits
+            if (username.Length < 3 || username.Length > 20)
+                return false;
+
+            return true;
         }
 
         /// <summary>
@@ -308,9 +400,9 @@ namespace ChatServer
         private void ChangeUsername(ClientInfo ci, string newName)
         {
             // Validate new username format
-            if (string.IsNullOrWhiteSpace(newName) || newName.Contains(' '))
+            if (!IsValidUsername(newName))
             {
-                WriteLine(ci.Tcp.GetStream(), "ERROR: Invalid username (no spaces, non-empty).");
+                WriteLine(ci.Tcp.GetStream(), "ERROR: Invalid username. Must be 3-20 characters, start with letter/number, and contain only letters, numbers, underscore, or hyphen.");
                 return;
             }
 
@@ -351,12 +443,71 @@ namespace ChatServer
         }
 
         /// <summary>
+        /// Logs a message to history and file
+        /// </summary>
+        /// <param name="username">Username of the sender</param>
+        /// <param name="content">Message content</param>
+        /// <param name="type">Type of message (chat, whisper, system, command)</param>
+        private void LogMessage(string username, string content, string type = "chat")
+        {
+            var msg = new ChatMessage(username, content, type);
+
+            // Add to in-memory history (keep last 1000 messages)
+            lock (_historyLock)
+            {
+                _messageHistory.Add(msg);
+                if (_messageHistory.Count > 1000)
+                {
+                    _messageHistory.RemoveAt(0);
+                }
+            }
+
+            // Write to log file
+            try
+            {
+                File.AppendAllText(_logFilePath, msg.ToString() + Environment.NewLine);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[server] Log write error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Gets recent message history for a client
+        /// </summary>
+        /// <param name="count">Number of recent messages to retrieve</param>
+        /// <returns>Array of recent messages</returns>
+        private ChatMessage[] GetRecentHistory(int count = 10)
+        {
+            lock (_historyLock)
+            {
+                return _messageHistory.TakeLast(count).ToArray();
+            }
+        }
+
+        /// <summary>
         /// Broadcasts a message to all connected clients except optionally excluded one
         /// </summary>
         /// <param name="message">Message to broadcast</param>
         /// <param name="exclude">Optional client to exclude from broadcast</param>
         private void Broadcast(string message, ClientInfo? exclude = null)
         {
+            // Log the message if it's from a specific user
+            if (exclude == null && message.Contains("]: "))
+            {
+                var parts = message.Split("]: ", 2);
+                if (parts.Length == 2)
+                {
+                    var username = parts[0].Substring(1); // Remove the '['
+                    LogMessage(username, parts[1], "chat");
+                }
+            }
+            else if (exclude == null && message.StartsWith("* ") && message.EndsWith(" *"))
+            {
+                LogMessage("SYSTEM", message, "system");
+            }
+
             byte[] bytes = Encoding.UTF8.GetBytes(message + "\r\n");
             foreach (var kv in _clients.ToArray())
             {
