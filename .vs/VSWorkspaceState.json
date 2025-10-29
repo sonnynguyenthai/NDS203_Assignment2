@@ -1,0 +1,15 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\Client",
+    "\\Client\\bin",
+    "\\Server",
+    "\\Server\\bin",
+    "\\Server\\bin\\Debug",
+    "\\Server\\bin\\Debug\\net6.0",
+    "\\Server\\bin\\Release",
+    "\\Server\\bin\\Release\\net6.0"
+  ],
+  "SelectedNode": "\\Client\\Program.cs",
+  "PreviewInSolutionExplorer": false
+}
