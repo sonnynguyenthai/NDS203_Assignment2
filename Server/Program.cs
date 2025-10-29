@@ -165,7 +165,7 @@ namespace ChatServer
             switch (root)
             {
                 case "!commands":
-                    WriteLine(ns, "Commands: !who, !about, !whisper <user> <msg>, !w <user> <msg>, !user <newname>, !uptime");
+                    WriteLine(ns, "Commands: !who, !about, !whisper <user> <msg>, !w <user> <msg>, !user <newname>, !ping, !stats");
                     if (ci.IsModerator) WriteLine(ns, "Moderator: !kick <user> [reason]");
                     break;
 
@@ -175,7 +175,7 @@ namespace ChatServer
                     break;
 
                 case "!about":
-                    WriteLine(ns, "NDS203 Chat Server — creator: ChatGPT helper, purpose: teaching sockets, year: 2025");
+                    WriteLine(ns, "NDS203 Chat Server — creator: Sonny, purpose: learning sockets, year: 2025");
                     break;
 
                 case "!whisper":
@@ -195,10 +195,17 @@ namespace ChatServer
                     var reason = parts.Length == 3 ? parts[2] : "Kicked by moderator";
                     KickUser(parts[1], reason);
                     break;
+                //Custom commands
+                case "!ping":
+                    WriteLine(ns, "pong");
+                    break;
 
-                case "!uptime":
+                case "!stats":
+                    var totalUsers = _clients.Count;
+                    var onlineUsers = _clients.Values.Count(c => !string.IsNullOrWhiteSpace(c.Username));
+                    var moderators = _clients.Values.Count(c => c.IsModerator);
                     var up = DateTime.UtcNow - _startTime;
-                    WriteLine(ns, $"Server uptime: {up:dd\\.hh\\:mm\\:ss}");
+                    WriteLine(ns, $"Server Stats: {onlineUsers} online users, {moderators} moderators, uptime: {up:dd\\.hh\\:mm\\:ss}");
                     break;
 
                 default:
