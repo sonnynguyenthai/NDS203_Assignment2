@@ -1,0 +1,4 @@
+[2025-10-29 11:54:56] [SYSTEM] SERVER: Chat server started
+[2025-10-29 11:55:48] [SYSTEM] SYSTEM: * SOnny is now a moderator *
+[2025-10-29 11:56:20] [SYSTEM] SYSTEM: * Bao was kicked by server (Kicked by server) *
+[2025-10-29 11:56:45] [SYSTEM] SYSTEM: * Bao was kicked by SOnny (Kicked by moderator) *

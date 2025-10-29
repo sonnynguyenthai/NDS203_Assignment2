@@ -89,7 +89,15 @@ namespace ChatServer
         public Server(int port)
         {
             _listener = new TcpListener(IPAddress.Any, port);
-            _logFilePath = $"chat_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
+
+            // Create logs directory if it doesn't exist
+            var logsDir = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            if (!Directory.Exists(logsDir))
+            {
+                Directory.CreateDirectory(logsDir);
+            }
+
+            _logFilePath = Path.Combine(logsDir, $"chat_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
             // Log server startup
             LogMessage("SERVER", "Chat server started", "system");
@@ -305,7 +313,10 @@ namespace ChatServer
                     if (!ci.IsModerator) { WriteLine(ns, "ERROR: Only moderators can use !kick"); break; }
                     if (parts.Length < 2) { WriteLine(ns, "Usage: !kick <username> [reason]"); break; }
                     var reason = parts.Length == 3 ? parts[2] : "Kicked by moderator";
-                    KickUser(parts[1], reason);
+                    if (!KickUser(parts[1], reason, ci))
+                    {
+                        WriteLine(ns, $"ERROR: User '{parts[1]}' not found.");
+                    }
                     break;
                 //Custom commands
                 case "!ping":
@@ -556,18 +567,20 @@ namespace ChatServer
         }
 
         /// <summary>
-        /// Kicks a user from the server with optional reason
+        /// Kicks a user from the server with optional reason (from moderator)
         /// </summary>
         /// <param name="username">Username to kick</param>
         /// <param name="reason">Reason for kicking</param>
-        private void KickUser(string username, string reason)
+        /// <param name="moderator">The moderator who initiated the kick</param>
+        /// <returns>True if user was found and kicked, false if user not found</returns>
+        private bool KickUser(string username, string reason, ClientInfo moderator)
         {
             // Find target user by username
             var target = _clients.Values.FirstOrDefault(c => string.Equals(c.Username, username, StringComparison.OrdinalIgnoreCase));
             if (target == null)
             {
-                Console.WriteLine($"[server] Kick failed; user '{username}' not found.");
-                return;
+                Console.WriteLine($"[server] Kick failed; user '{username}' not found by moderator {moderator.Username}.");
+                return false;
             }
 
             // Send kick notification to target client
@@ -578,7 +591,36 @@ namespace ChatServer
             catch { }
 
             // Disconnect the user
-            Disconnect(target, notify: true, reason: $"was kicked ({reason})");
+            Disconnect(target, notify: true, reason: $"was kicked by {moderator.Username} ({reason})");
+            return true;
+        }
+
+        /// <summary>
+        /// Kicks a user from the server with optional reason (from server console)
+        /// </summary>
+        /// <param name="username">Username to kick</param>
+        /// <param name="reason">Reason for kicking</param>
+        /// <returns>True if user was found and kicked, false if user not found</returns>
+        private bool KickUserFromServer(string username, string reason)
+        {
+            // Find target user by username
+            var target = _clients.Values.FirstOrDefault(c => string.Equals(c.Username, username, StringComparison.OrdinalIgnoreCase));
+            if (target == null)
+            {
+                Console.WriteLine($"[server] Kick failed; user '{username}' not found.");
+                return false;
+            }
+
+            // Send kick notification to target client
+            try
+            {
+                WriteLine(target.Tcp.GetStream(), $"!kicked {reason}");
+            }
+            catch { }
+
+            // Disconnect the user
+            Disconnect(target, notify: true, reason: $"was kicked by server ({reason})");
+            return true;
         }
 
         /// <summary>
@@ -609,7 +651,10 @@ namespace ChatServer
                 case "!kick":
                     if (parts.Length < 2) { Console.WriteLine("Usage: !kick <username> [reason]"); break; }
                     var reason = parts.Length == 3 ? parts[2] : "Kicked by server";
-                    KickUser(parts[1], reason);
+                    if (!KickUserFromServer(parts[1], reason))
+                    {
+                        Console.WriteLine($"ERROR: User '{parts[1]}' not found.");
+                    }
                     break;
 
                 case "!shutdown":
