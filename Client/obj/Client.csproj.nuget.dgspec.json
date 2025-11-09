@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_Assignment2/Client/Client.csproj": {}
+    "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_SonnyNguyen_ A00188041_Assessment2/Client/Client.csproj": {}
   },
   "projects": {
-    "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_Assignment2/Client/Client.csproj": {
+    "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_SonnyNguyen_ A00188041_Assessment2/Client/Client.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_Assignment2/Client/Client.csproj",
+        "projectUniqueName": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_SonnyNguyen_ A00188041_Assessment2/Client/Client.csproj",
         "projectName": "Client",
-        "projectPath": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_Assignment2/Client/Client.csproj",
+        "projectPath": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_SonnyNguyen_ A00188041_Assessment2/Client/Client.csproj",
         "packagesPath": "/Users/nguyensonny/.nuget/packages/",
-        "outputPath": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_Assignment2/Client/obj/",
+        "outputPath": "/Users/nguyensonny/Documents/Torrens/Networking and DB/Assessment2/NDS203_Sonny/NDS203_SonnyNguyen_ A00188041_Assessment2/Client/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "/Users/nguyensonny/.nuget/NuGet/NuGet.Config"

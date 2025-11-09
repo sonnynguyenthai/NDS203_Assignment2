@@ -5,9 +5,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
+using DotNetEnv;
 
 namespace ChatServer
 {
@@ -82,6 +86,10 @@ namespace ChatServer
         private readonly object _historyLock = new();
         private readonly string _logFilePath;
 
+        // AI content moderation
+        private readonly string? _geminiApiKey;
+        private readonly HttpClient _httpClient;
+
         /// <summary>
         /// Initializes a new server instance on the specified port
         /// </summary>
@@ -98,6 +106,28 @@ namespace ChatServer
             }
 
             _logFilePath = Path.Combine(logsDir, $"chat_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+
+            // Load environment variables from .env file if it exists
+            var envFile = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+            if (File.Exists(envFile))
+            {
+                Env.Load(envFile);
+                Console.WriteLine("[server] Loaded environment variables from .env file.");
+            }
+
+            // Get Gemini API key from environment variable
+            _geminiApiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            if (string.IsNullOrWhiteSpace(_geminiApiKey))
+            {
+                Console.WriteLine("[server] WARNING: GEMINI_API_KEY environment variable not set. Bad word detection will be disabled.");
+            }
+            else
+            {
+                Console.WriteLine("[server] Bad word detection enabled with Gemini AI.");
+            }
+
+            // Initialize HTTP client for Gemini API calls
+            _httpClient = new HttpClient();
 
             // Log server startup
             LogMessage("SERVER", "Chat server started", "system");
@@ -248,8 +278,34 @@ namespace ChatServer
                     }
                     else
                     {
-                        // Broadcast regular chat message to all clients
-                        Broadcast($"[{ci.Username}]: {line}");
+                        // Check for bad words using AI before broadcasting
+                        bool hasBadWords = false;
+                        try
+                        {
+                            // Run async detection synchronously in the thread pool
+                            var task = Task.Run(async () => await DetectBadWords(line));
+                            hasBadWords = task.GetAwaiter().GetResult();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[server] Error checking message for bad words: {ex.Message}");
+                            // On error, allow message through (fail open)
+                        }
+
+                        if (hasBadWords)
+                        {
+                            // Notify all moderators about the inappropriate message
+                            NotifyModerators(ci.Username, line);
+
+                            // Still broadcast the message (moderators can take action if needed)
+                            // You can change this to block the message if desired
+                            Broadcast($"[{ci.Username}]: {line}");
+                        }
+                        else
+                        {
+                            // Broadcast regular chat message to all clients
+                            Broadcast($"[{ci.Username}]: {line}");
+                        }
                     }
                 }
             }
@@ -274,7 +330,6 @@ namespace ChatServer
             var ns = ci.Tcp.GetStream();
             string[] parts = cmd.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
             string root = parts[0].ToLowerInvariant();
-
             switch (root)
             {
                 case "!commands":
@@ -535,6 +590,167 @@ namespace ChatServer
                 }
             }
             Console.WriteLine(message);  // Also log to server console
+        }
+
+        /// <summary>
+        /// Detects bad words in a message using Google Gemini AI
+        /// </summary>
+        /// <param name="message">Message content to check</param>
+        /// <returns>True if bad words are detected, false otherwise</returns>
+        private async Task<bool> DetectBadWords(string message)
+        {
+            // If API key is not set, skip detection
+            if (string.IsNullOrWhiteSpace(_geminiApiKey))
+            {
+                return false;
+            }
+
+            try
+            {
+                // Create prompt for content moderation
+                var prompt = $@"Analyze the following chat message and determine if it contains inappropriate content, bad words, profanity, hate speech, or offensive language.
+
+Message: ""{message}""
+
+Respond with ONLY ""true"" if the message contains inappropriate content, bad words, profanity, hate speech, or offensive language. Respond with ONLY ""false"" if the message is clean and appropriate.
+
+Your response (true or false only):";
+
+                // Prepare request payload - Gemini API expects lowercase property names
+                var requestBody = new Dictionary<string, object>
+                {
+                    ["contents"] = new[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["parts"] = new[]
+                            {
+                                new Dictionary<string, object>
+                                {
+                                    ["text"] = prompt
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // Make API call to Gemini
+                // Try different model names and API versions
+                // Start with newer models first (2.5, 2.0, then 1.5)
+                var models = new[] { "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro", "gemini-1.5-pro" };
+                var apiVersions = new[] { "v1beta", "v1" };
+
+                HttpResponseMessage? response = null;
+                string? lastError = null;
+                bool success = false;
+
+                foreach (var version in apiVersions)
+                {
+                    if (success) break;
+
+                    foreach (var model in models)
+                    {
+                        try
+                        {
+                            var url = $"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={_geminiApiKey}";
+                            var json = JsonSerializer.Serialize(requestBody);
+                            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                            response = await _httpClient.PostAsync(url, content);
+
+                            if (response.IsSuccessStatusCode)
+                            {
+                                // Success! Use this response
+                                success = true;
+                                break;
+                            }
+                            else
+                            {
+                                var errorContent = await response.Content.ReadAsStringAsync();
+                                lastError = $"API returned {response.StatusCode}: {errorContent}";
+                                Console.WriteLine($"[server] Trying {version}/{model} failed: {lastError}");
+                                response.Dispose();
+                                response = null;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            lastError = ex.Message;
+                            Console.WriteLine($"[server] Error trying {version}/{model}: {ex.Message}");
+                            response?.Dispose();
+                            response = null;
+                        }
+                    }
+                }
+
+                if (!success || response == null || !response.IsSuccessStatusCode)
+                {
+                    throw new HttpRequestException($"All Gemini API endpoints failed. Last error: {lastError}");
+                }
+
+                var responseJson = await response.Content.ReadAsStringAsync();
+                var responseDoc = JsonDocument.Parse(responseJson);
+
+                // Extract the generated text from the response
+                if (responseDoc.RootElement.TryGetProperty("candidates", out var candidates) &&
+                    candidates.GetArrayLength() > 0)
+                {
+                    var firstCandidate = candidates[0];
+                    if (firstCandidate.TryGetProperty("content", out var contentObj) &&
+                        contentObj.TryGetProperty("parts", out var parts) &&
+                        parts.GetArrayLength() > 0)
+                    {
+                        var firstPart = parts[0];
+                        if (firstPart.TryGetProperty("text", out var textElement))
+                        {
+                            var result = textElement.GetString()?.Trim().ToLowerInvariant();
+                            if (result == "true")
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[server] Error detecting bad words with Gemini: {ex.Message}");
+                // On error, don't block messages - fail open
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Sends a notification to all moderators about detected bad words
+        /// </summary>
+        /// <param name="username">Username of the user who sent the message</param>
+        /// <param name="message">The message content that was flagged</param>
+        private void NotifyModerators(string username, string message)
+        {
+            var notification = $"[MODERATOR ALERT] User '{username}' sent a message with inappropriate content: \"{message}\"";
+
+            // Send notification to all moderators
+            foreach (var kv in _clients.ToArray())
+            {
+                var ci = kv.Value;
+                if (ci.IsModerator && !string.IsNullOrWhiteSpace(ci.Username))
+                {
+                    try
+                    {
+                        var ns = ci.Tcp.GetStream();
+                        WriteLine(ns, notification);
+                    }
+                    catch
+                    {
+                        // Ignore write errors
+                    }
+                }
+            }
+
+            // Also log to server console
+            Console.WriteLine(notification);
+            LogMessage("SYSTEM", notification, "system");
         }
 
         /// <summary>

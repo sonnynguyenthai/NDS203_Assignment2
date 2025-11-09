@@ -6,4 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="6.0.0" />
+    <PackageReference Include="DotNetEnv" Version="3.0.0" />
+  </ItemGroup>
 </Project>
