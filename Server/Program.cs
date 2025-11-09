@@ -296,10 +296,7 @@ namespace ChatServer
                         {
                             // Notify all moderators about the inappropriate message
                             NotifyModerators(ci.Username, line);
-
-                            // Still broadcast the message (moderators can take action if needed)
-                            // You can change this to block the message if desired
-                            Broadcast($"[{ci.Username}]: {line}");
+                            WriteLine(ns, "ERROR: Message contains inappropriate content. Whisper not sent.");
                         }
                         else
                         {
@@ -356,7 +353,17 @@ namespace ChatServer
                 case "!whisper":
                 case "!w":
                     if (parts.Length < 3) { WriteLine(ns, "Usage: !whisper <username> <message>"); break; }
-                    Whisper(ci, parts[1], parts[2]);
+                    var task = Task.Run(async () => await DetectBadWords(parts[2]));
+                    var hasBadWords = task.GetAwaiter().GetResult();
+                    if (hasBadWords)
+                    {
+                        NotifyModerators(ci.Username, parts[2]);
+                        WriteLine(ns, "ERROR: Message contains inappropriate content. Whisper not sent."); break;
+                    }
+                    else
+                    {
+                        Whisper(ci, parts[1], parts[2]);
+                    }
                     break;
 
                 case "!user":
