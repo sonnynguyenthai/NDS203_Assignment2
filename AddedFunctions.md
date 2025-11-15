@@ -125,7 +125,7 @@ Automated content moderation system using Google Gemini AI to detect inappropria
 ### Commands Added:
 - `!ping` - Simple connectivity test (returns "pong")
 - `!stats` - Display server statistics (users, moderators, uptime)
-- `!history` - Display recent chat history (moderator only)
+- `!history count` - Display recent chat history (moderator only)
 
 ### Enhanced Error Handling:
 - **Kick Command Validation** - `!kick` now checks if user exists before attempting to kick

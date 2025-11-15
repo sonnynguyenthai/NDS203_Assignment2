@@ -399,7 +399,9 @@ namespace ChatServer
                         WriteLine(ns, "ERROR: Only moderators can view chat history.");
                         break;
                     }
-                    var history = GetRecentHistory(10);
+                    if (parts.Length < 2) { WriteLine(ns, "Usage: !history <count>"); break; }
+                    if (!int.TryParse(parts[1], out var count)) { WriteLine(ns, "ERROR: Invalid count. Must be a number."); break; }
+                    var history = GetRecentHistory(int.Parse(parts[1]));
                     WriteLine(ns, "Recent chat history:");
                     foreach (var msg in history)
                     {
